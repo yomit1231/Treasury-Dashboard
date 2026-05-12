@@ -132,11 +132,23 @@ export function parseValleyFormat(text) {
 }
 
 // Parse check register CSV
-// Returns per-account: { last_rec_date, outstanding_checks (numbered checks only) }
+// Supports two formats:
+// Old format: date=parts[1], doc=parts[3], amount=parts[6], cleared=parts[7]
+// New format: date=parts[1], doc=parts[7], amount=parts[9], cleared=parts[12]
 export function parseCheckRegister(text) {
   const lines = text.split('\n')
   const results = {}
   let currentAcct = null
+
+  // Auto-detect format by checking column count of first data row
+  let useNewFormat = false
+  for (const line of lines) {
+    if (line.startsWith(',')) {
+      const parts = Papa.parse(line, {}).data[0] || []
+      if (parts.length >= 13) { useNewFormat = true }
+      break
+    }
+  }
 
   lines.forEach(line => {
     if (line.includes('Account no:')) {
@@ -153,12 +165,22 @@ export function parseCheckRegister(text) {
     if (!parts[1] || !parts[1].match(/^\d{2}\/\d{2}\/\d{4}/)) return
 
     const date = parts[1].trim()
-    const doc = (parts[3] || '').trim()
-    const amtRaw = (parts[6] || '').replace(/[$,]/g, '')
-    const amount = parseFloat(amtRaw)
-    const cleared = (parts[7] || '').trim()
+    let doc, amtRaw, cleared
 
-    if (!isNaN(amount)) {
+    if (useNewFormat) {
+      // New format: doc=parts[7], amount=parts[9], cleared=parts[12]
+      doc = (parts[7] || '').trim()
+      amtRaw = (parts[9] || '').replace(/[$,]/g, '')
+      cleared = (parts[12] || '').trim()
+    } else {
+      // Old format: doc=parts[3], amount=parts[6], cleared=parts[7]
+      doc = (parts[3] || '').trim()
+      amtRaw = (parts[6] || '').replace(/[$,]/g, '')
+      cleared = (parts[7] || '').trim()
+    }
+
+    const amount = parseFloat(amtRaw)
+    if (!isNaN(amount) && amount > 0) {
       results[currentAcct].rows.push({ date, doc, amount, cleared })
     }
   })
@@ -168,17 +190,16 @@ export function parseCheckRegister(text) {
   Object.entries(results).forEach(([acct, data]) => {
     const rows = data.rows
 
-    // Last rec = max cleared date
+    // Last rec = max date value that looks like a date (MM/DD/YYYY) in cleared column
     const clearedDates = rows
-      .filter(r => r.cleared !== 'In transit' && r.cleared !== '' && r.amount > 0)
-      .map(r => r.cleared)
-      .filter(d => d.match(/^\d{2}\/\d{2}\/\d{4}/))
-      .map(d => new Date(d))
+      .filter(r => r.cleared && r.cleared.match(/^\d{2}\/\d{2}\/\d{4}$/))
+      .map(r => new Date(r.cleared))
+      .filter(d => !isNaN(d))
     const lastRec = clearedDates.length ? new Date(Math.max(...clearedDates)) : null
 
     // Numbered checks in transit only
     const outstandingChecks = rows
-      .filter(r => r.cleared === 'In transit' && r.amount > 0 && /^\d+$/.test(r.doc))
+      .filter(r => r.cleared === 'In transit' && /^\d+$/.test(r.doc))
       .reduce((sum, r) => sum + r.amount, 0)
 
     adjustments[acct] = {
