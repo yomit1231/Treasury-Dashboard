@@ -63,14 +63,16 @@ export function parseMCBFormat(text) {
 }
 
 // Parse Valley Bank / Bankwell format
-// Has summary section (Opening/Closing Ledger) + transaction section (BAI Type)
+// Balance section: Date, ABA Routing #, Currency, Account Number, Account Name, Opening Ledger, CR Amount, CR Count, DB Amount, DB Count, Closing Ledger
+// Transaction section: Date, ABA Routing #, Currency, Account Number, Account Name, BAI Type, BAI Code, CR Amount, DB Amount, Serial Num, Ref Num, Description
 export function parseValleyFormat(text) {
   const lines = text.split('\n')
   const balances = {}
   const transactions = []
 
-  // Find balance header and transaction header
+  // Find balance header: contains 'Opening Ledger' and 'Closing Ledger'
   const balHeaderIdx = lines.findIndex(l => l.includes('Opening Ledger') && l.includes('Closing Ledger'))
+  // Find transaction header: contains 'BAI Type' and 'BAI Code'
   const txnHeaderIdx = lines.findIndex(l => l.includes('BAI Type') && l.includes('BAI Code'))
 
   if (balHeaderIdx !== -1) {
@@ -82,12 +84,15 @@ export function parseValleyFormat(text) {
 
     balRows.forEach(row => {
       const acct = (row['Account Number'] || '').trim()
-      if (!acct || acct === 'Totals') return
-      const closing = parseFloat((row['Closing Ledger'] || '').replace(/[$,]/g, ''))
-      const opening = parseFloat((row['Opening Ledger'] || '').replace(/[$,]/g, ''))
-      const val = !isNaN(closing) && closing !== 0 ? closing : !isNaN(opening) && opening !== 0 ? opening : null
+      if (!acct || acct === 'Totals' || acct === '') return
+      // Use Closing Ledger as the balance, fall back to Opening Ledger
+      const closingRaw = (row['Closing Ledger'] || '').replace(/[$,]/g, '').trim()
+      const openingRaw = (row['Opening Ledger'] || '').replace(/[$,]/g, '').trim()
+      const closing = parseFloat(closingRaw)
+      const opening = parseFloat(openingRaw)
+      const val = !isNaN(closing) ? closing : !isNaN(opening) ? opening : null
+      // Date is a range like "01/01/2026 - 05/12/2026" — use the end date
       const dateRange = (row['Date'] || '').trim()
-      // Date is a range like "05/01/2026 - 05/10/2026" — use end date
       const endDate = dateRange.includes(' - ') ? dateRange.split(' - ')[1].trim() : dateRange
       if (acct && val !== null) {
         balances[acct] = { balance: val, balance_date: endDate }
@@ -105,6 +110,7 @@ export function parseValleyFormat(text) {
       const acct = (row['Account Number'] || '').trim()
       if (!acct) return
       const date = (row['Date'] || '').trim()
+      if (!date.match(/^\d{2}\/\d{2}\/\d{4}/)) return
       const cr = parseFloat((row['CR Amount'] || '').replace(/[$,]/g, '')) || 0
       const db = parseFloat((row['DB Amount'] || '').replace(/[$,]/g, '')) || 0
       const amt = cr - db
@@ -114,7 +120,7 @@ export function parseValleyFormat(text) {
         txn_date: date,
         description: (row['BAI Type'] || '').trim(),
         memo: (row['Description'] || '').trim(),
-        amount: amt
+        amount: Math.round(amt * 100) / 100
       })
     })
   }
