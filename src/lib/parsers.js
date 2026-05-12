@@ -2,10 +2,11 @@ import Papa from 'papaparse'
 
 // Detect which bank format a file is
 // Valley/Bankwell: has Opening Ledger + Closing Ledger summary section (checked first)
-// MCB/IDB/ONB: uses Record Type column
+// MCB/IDB/ONB: uses Record Type column with Balance/Detail rows
 export function detectFormat(text) {
   if (text.includes('Opening Ledger') && text.includes('Closing Ledger')) return 'valley_bankwell'
-  if (text.includes('Record Type') && text.includes('BAI Type')) return 'mcb_idb_onb'
+  if (text.includes('Record Type') && text.includes('Balance') && text.includes('Detail')) return 'mcb_idb_onb'
+  if (text.includes('Record Type') && text.includes('Balance')) return 'mcb_idb_onb'
   if (text.includes('BAI Type') && text.includes('BAI Code')) return 'mcb_idb_onb'
   return 'unknown'
 }
