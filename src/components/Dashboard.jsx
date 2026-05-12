@@ -89,10 +89,17 @@ export default function Dashboard() {
 
   function getDisplayBal(acctNum, type) {
     const adj = checkAdj[acctNum]
-    if (type === 'OP' && adj) {
-      return { val: adj.adjusted_balance, adjusted: true, rec: adj.last_rec_date, outstanding: adj.outstanding_checks }
-    }
     const b = balances[acctNum]
+    if (type === 'OP' && adj && adj.outstanding_checks > 0) {
+      // Calculate adjusted balance = bank balance - outstanding checks
+      const bankBal = b?.balance ?? null
+      const adjBal = bankBal != null ? Math.round((bankBal - adj.outstanding_checks) * 100) / 100 : null
+      return { val: adjBal, adjusted: true, rec: adj.last_rec_date, outstanding: adj.outstanding_checks }
+    }
+    if (type === 'OP' && adj && adj.outstanding_checks === 0) {
+      // No outstanding checks - show bank balance as-is with rec indicator
+      return { val: b?.balance ?? null, adjusted: true, rec: adj.last_rec_date, outstanding: 0 }
+    }
     return { val: b?.balance ?? null, adjusted: false, rec: null, outstanding: 0 }
   }
 
