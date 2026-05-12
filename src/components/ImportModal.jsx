@@ -70,7 +70,10 @@ export default function ImportModal({ type, accounts, onClose, onSuccess }) {
 
         // Save balances
         setMessage('Saving balances…')
-        await supabase.from('balances').delete().in('account_number', acctNums)
+        // Delete balances one at a time
+        for (const num of acctNums) {
+          await supabase.from('balances').delete().eq('account_number', num)
+        }
         const balRows = Object.entries(balances).map(([acctNum, b]) => {
           const acctObj = accounts.find(a => a.account_number === acctNum)
           return {
@@ -90,7 +93,10 @@ export default function ImportModal({ type, accounts, onClose, onSuccess }) {
           const period = transactions[0]?.txn_date?.substring(0, 7) || ''
           const txnAcctNums = [...new Set(transactions.map(t => t.account_number))]
           if (period) {
-            await supabase.from('transactions').delete().eq('period_month', period).in('account_number', txnAcctNums)
+            // Delete transactions one at a time
+          for (const num of txnAcctNums) {
+            await supabase.from('transactions').delete().eq('account_number', num).eq('period_month', period)
+          }
           }
           const enriched = transactions.map(t => {
             const acctObj = accounts.find(a => a.account_number === t.account_number)
@@ -114,9 +120,11 @@ export default function ImportModal({ type, accounts, onClose, onSuccess }) {
           outstanding_checks: adj.outstanding_checks,
           adjusted_balance: null,
         }))
-        const acctNums = rows.map(r => r.account_number)
-        await supabase.from('check_adjustments').delete().in('account_number', acctNums)
-        await insertInBatches('check_adjustments', rows, 25)
+        // Delete one at a time to avoid free tier timeout
+        for (const row of rows) {
+          await supabase.from('check_adjustments').delete().eq('account_number', row.account_number)
+        }
+        await insertInBatches('check_adjustments', rows, 10)
         setStatus('done')
         setMessage(`✓ Saved check adjustments for ${rows.length} accounts.`)
       }
