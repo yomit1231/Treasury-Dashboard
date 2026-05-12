@@ -49,6 +49,16 @@ export default function ImportModal({ type, accounts, onClose, onSuccess }) {
     reader.readAsText(file)
   }
 
+  async function insertInBatches(table, rows, batchSize = 25) {
+    for (let i = 0; i < rows.length; i += batchSize) {
+      const batch = rows.slice(i, i + batchSize)
+      const { error } = await supabase.from(table).insert(batch)
+      if (error) throw error
+      setMessage(`Saving… ${Math.min(i + batchSize, rows.length)} of ${rows.length}`)
+      await new Promise(r => setTimeout(r, 150))
+    }
+  }
+
   async function handleSave() {
     setStatus('saving')
     setMessage('Saving to database…')
@@ -56,8 +66,11 @@ export default function ImportModal({ type, accounts, onClose, onSuccess }) {
     try {
       if (isBankImport) {
         const { balances, transactions } = preview
+        const acctNums = Object.keys(balances)
 
-        // Upsert balances
+        // Save balances
+        setMessage('Saving balances…')
+        await supabase.from('balances').delete().in('account_number', acctNums)
         const balRows = Object.entries(balances).map(([acctNum, b]) => {
           const acctObj = accounts.find(a => a.account_number === acctNum)
           return {
@@ -67,22 +80,18 @@ export default function ImportModal({ type, accounts, onClose, onSuccess }) {
             bank_source: acctObj?.bank_name || 'Unknown',
           }
         })
-
-        // Delete old balances for these accounts first, then insert
-        const acctNums = Object.keys(balances)
-        await supabase.from('balances').delete().in('account_number', acctNums)
         if (balRows.length > 0) {
           const { error } = await supabase.from('balances').insert(balRows)
           if (error) throw error
         }
 
-        // Insert transactions (batch by month)
+        // Save transactions in small batches
         if (transactions.length > 0) {
           const period = transactions[0]?.txn_date?.substring(0, 7) || ''
+          const txnAcctNums = [...new Set(transactions.map(t => t.account_number))]
           if (period) {
-            await supabase.from('transactions').delete().eq('period_month', period).in('account_number', acctNums)
+            await supabase.from('transactions').delete().eq('period_month', period).in('account_number', txnAcctNums)
           }
-          // Enrich with bank_source
           const enriched = transactions.map(t => {
             const acctObj = accounts.find(a => a.account_number === t.account_number)
             return {
@@ -91,44 +100,28 @@ export default function ImportModal({ type, accounts, onClose, onSuccess }) {
               period_month: t.txn_date?.substring(0, 7) || ''
             }
           })
-          // Insert in chunks of 500
-          for (let i = 0; i < enriched.length; i += 500) {
-            const { error } = await supabase.from('transactions').insert(enriched.slice(i, i + 500))
-            if (error) throw error
-          }
+          await insertInBatches('transactions', enriched, 25)
         }
 
         setStatus('done')
         setMessage(`✓ Saved ${balRows.length} balances and ${transactions.length} transactions.`)
 
       } else {
-        // Check register
         const { adjustments } = preview
-        const rows = []
-        Object.entries(adjustments).forEach(([acctNum, adj]) => {
-          const acctObj = accounts.find(a => a.account_number === acctNum)
-          const bankBal = null // will be joined from balances table
-          rows.push({
-            account_number: acctNum,
-            last_rec_date: adj.last_rec_date,
-            outstanding_checks: adj.outstanding_checks,
-            adjusted_balance: null, // calculated at read time: balance - outstanding
-          })
-        })
-
-        // Delete existing and re-insert
+        const rows = Object.entries(adjustments).map(([acctNum, adj]) => ({
+          account_number: acctNum,
+          last_rec_date: adj.last_rec_date,
+          outstanding_checks: adj.outstanding_checks,
+          adjusted_balance: null,
+        }))
         const acctNums = rows.map(r => r.account_number)
         await supabase.from('check_adjustments').delete().in('account_number', acctNums)
-        if (rows.length > 0) {
-          const { error } = await supabase.from('check_adjustments').insert(rows)
-          if (error) throw error
-        }
-
+        await insertInBatches('check_adjustments', rows, 25)
         setStatus('done')
         setMessage(`✓ Saved check adjustments for ${rows.length} accounts.`)
       }
 
-      setTimeout(onSuccess, 1200)
+      setTimeout(onSuccess, 1500)
 
     } catch (err) {
       setStatus('error')
