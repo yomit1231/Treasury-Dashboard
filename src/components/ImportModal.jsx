@@ -52,17 +52,29 @@ export default function ImportModal({ type, accounts, onClose, onSuccess }) {
   async function insertInBatches(table, rows, batchSize = 25) {
     const conflictCol = {
       balances: 'account_number,balance_date',
-      transactions: 'account_number,txn_date,amount,description',
+      transactions: 'account_number,txn_date,amount,description,memo',
       check_adjustments: 'account_number',
     }[table]
-    for (let i = 0; i < rows.length; i += batchSize) {
-      const batch = rows.slice(i, i + batchSize)
+
+    // Deduplicate rows by conflict key before inserting
+    const deduped = conflictCol ? (() => {
+      const seen = new Set()
+      return rows.filter(row => {
+        const key = conflictCol.split(',').map(c => row[c.trim()]).join('|')
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+    })() : rows
+
+    for (let i = 0; i < deduped.length; i += batchSize) {
+      const batch = deduped.slice(i, i + batchSize)
       const query = conflictCol
-        ? supabase.from(table).upsert(batch, { onConflict: conflictCol, ignoreDuplicates: false })
+        ? supabase.from(table).upsert(batch, { onConflict: conflictCol, ignoreDuplicates: true })
         : supabase.from(table).insert(batch)
       const { error } = await query
       if (error) throw error
-      setMessage(`Saving… ${Math.min(i + batchSize, rows.length)} of ${rows.length}`)
+      setMessage(`Saving… ${Math.min(i + batchSize, deduped.length)} of ${deduped.length}`)
       await new Promise(r => setTimeout(r, 100))
     }
   }
