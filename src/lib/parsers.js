@@ -1,13 +1,16 @@
 import Papa from 'papaparse'
 
 // Detect which bank format a file is
-// Valley/Bankwell: has Opening Ledger + Closing Ledger summary section (checked first)
-// MCB/IDB/ONB: uses Record Type column with Balance/Detail rows
+// MCB/IDB/ONB: first column header is 'Record Type'
+// Valley/Bankwell: first column header is 'Date' with Opening/Closing Ledger columns
 export function detectFormat(text) {
-  if (text.includes('Opening Ledger') && text.includes('Closing Ledger')) return 'valley_bankwell'
-  if (text.includes('Record Type') && text.includes('Balance') && text.includes('Detail')) return 'mcb_idb_onb'
-  if (text.includes('Record Type') && text.includes('Balance')) return 'mcb_idb_onb'
-  if (text.includes('BAI Type') && text.includes('BAI Code')) return 'mcb_idb_onb'
+  const firstLine = text.split('\n')[0].trim()
+  // MCB/IDB/ONB always starts with 'Record Type' as first column
+  if (firstLine.startsWith('Record Type,') || firstLine.startsWith('"Record Type",')) return 'mcb_idb_onb'
+  // Valley/Bankwell has Opening Ledger and Closing Ledger as column headers (not data values)
+  if (firstLine.includes('Opening Ledger') && firstLine.includes('Closing Ledger')) return 'valley_bankwell'
+  // Fallback: check for BAI Type in header
+  if (firstLine.includes('BAI Type') && firstLine.includes('BAI Code')) return 'valley_bankwell'
   return 'unknown'
 }
 
