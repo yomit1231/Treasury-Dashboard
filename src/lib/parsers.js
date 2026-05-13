@@ -45,25 +45,31 @@ export function parseMCBFormat(text) {
     }
   })
 
-  // Extract latest closing balance per account
-  const balances = {}
+  // Extract balances: latest for display + all daily for trends
+  const balances = {}        // latest per account (for dashboard display)
+  const dailyBalances = []   // all dates (for trend tracking)
+
   Object.entries(balancesByAcct).forEach(([acct, dateMap]) => {
     const sortedDates = Object.keys(dateMap).sort().reverse()
-    let found = false
+    let foundLatest = false
     for (const date of sortedDates) {
       for (const key of PREFER) {
         const val = dateMap[date][key]
         if (val != null && val !== 0) {
-          balances[acct] = { balance: val, balance_date: date }
-          found = true
+          // Save daily balance for trend tracking
+          dailyBalances.push({ account_number: acct, balance: val, balance_date: date })
+          // Save latest as the display balance
+          if (!foundLatest) {
+            balances[acct] = { balance: val, balance_date: date }
+            foundLatest = true
+          }
           break
         }
       }
-      if (found) break
     }
   })
 
-  return { balances, transactions }
+  return { balances, dailyBalances, transactions }
 }
 
 // Parse Valley Bank / Bankwell format
@@ -129,7 +135,14 @@ export function parseValleyFormat(text) {
     })
   }
 
-  return { balances, transactions }
+  // Build daily balances array for trend tracking
+  const dailyBalances = Object.entries(balances).map(([acct, b]) => ({
+    account_number: acct,
+    balance: b.balance,
+    balance_date: b.balance_date
+  }))
+
+  return { balances, dailyBalances, transactions }
 }
 
 // Parse check register CSV
