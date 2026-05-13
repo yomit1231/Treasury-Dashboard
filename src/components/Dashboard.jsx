@@ -36,8 +36,8 @@ function fmt(v) {
 }
 function fmtM(v) { return '$' + (v / 1e6).toFixed(2) + 'M' }
 
-const TABS = ['Facilities', 'Banks', 'Check Register', 'Activity', 'Notes']
-const ADMIN_TABS = ['Facilities', 'Banks', 'Check Register', 'Activity', 'Notes', 'Import']
+const TABS = ['Facilities', 'Banks', 'Check Register', 'Activity', 'Notes', 'Trends']
+const ADMIN_TABS = ['Facilities', 'Banks', 'Check Register', 'Activity', 'Notes', 'Trends', 'Import']
 
 export default function Dashboard() {
   const { user, role, userName, signOut, isAdmin } = useAuth()
@@ -48,6 +48,7 @@ export default function Dashboard() {
   const [checkAdj, setCheckAdj] = useState({})       // acct_num -> {last_rec_date, outstanding_checks, adjusted_balance}
   const [transactions, setTransactions] = useState([])
   const [notes, setNotes] = useState([])
+  const [dailyBalances, setDailyBalances] = useState([])
   const [loading, setLoading] = useState(true)
   const [showImport, setShowImport] = useState(false)
   const [showNote, setShowNote] = useState(false)
@@ -60,12 +61,13 @@ export default function Dashboard() {
 
   const loadData = useCallback(async () => {
     setLoading(true)
-    const [acctRes, balRes, adjRes, txnRes, noteRes] = await Promise.all([
+    const [acctRes, balRes, adjRes, txnRes, noteRes, dailyRes] = await Promise.all([
       supabase.from('accounts').select('*').eq('active', true).order('facility').order('type'),
       supabase.from('balances').select('*'),
       supabase.from('check_adjustments').select('*'),
       supabase.from('transactions').select('*').order('txn_date', { ascending: false }).limit(500),
-      supabase.from('notes').select('*').order('created_at', { ascending: false })
+      supabase.from('notes').select('*').order('created_at', { ascending: false }),
+      supabase.from('daily_balances').select('*').order('balance_date', { ascending: true })
     ])
     setAccounts(acctRes.data || [])
 
@@ -82,6 +84,7 @@ export default function Dashboard() {
 
     setTransactions(txnRes.data || [])
     setNotes(noteRes.data || [])
+    setDailyBalances(dailyRes.data || [])
     setLoading(false)
   }, [])
 
@@ -502,7 +505,126 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── IMPORT TAB (admin only) ── */}
+        {/* ── TRENDS TAB ── */}
+        {tab === 'Trends' && (
+          <div>
+            <p style={{ fontSize: 12, color: '#888', marginBottom: 12 }}>
+              Month-end balances by facility · last 6 months · based on imported bank data
+            </p>
+            {(() => {
+              if (dailyBalances.length === 0) return (
+                <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #ebebeb', padding: '40px', textAlign: 'center', color: '#aaa', fontSize: 13 }}>
+                  No trend data yet — import bank CSVs to populate
+                </div>
+              )
+
+              // Build month-end balances per account
+              const acctMap = {}
+              accounts.forEach(a => { acctMap[a.account_number] = a })
+
+              // Get all months present in data
+              const monthSet = new Set()
+              dailyBalances.forEach(b => {
+                const d = new Date(b.balance_date)
+                if (!isNaN(d)) monthSet.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`)
+              })
+              const months = [...monthSet].sort().slice(-6)
+
+              // Get last balance per account per month
+              const acctMonthBal = {}
+              dailyBalances.forEach(b => {
+                const d = new Date(b.balance_date)
+                if (isNaN(d)) return
+                const month = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`
+                if (!months.includes(month)) return
+                const key = `${b.account_number}|${month}`
+                if (!acctMonthBal[key] || b.balance_date > acctMonthBal[key].date) {
+                  acctMonthBal[key] = { bal: b.balance, date: b.balance_date }
+                }
+              })
+
+              // Aggregate by facility per month
+              const facMonthBal = {}
+              accounts.forEach(a => {
+                months.forEach(m => {
+                  const key = `${a.account_number}|${m}`
+                  const val = acctMonthBal[key]
+                  if (val) {
+                    if (!facMonthBal[a.facility]) facMonthBal[a.facility] = {}
+                    facMonthBal[a.facility][m] = (facMonthBal[a.facility][m] || 0) + val.bal
+                  }
+                })
+              })
+
+              const facilities = Object.keys(facMonthBal).sort()
+              const fmtK = v => v == null ? '—' : '$' + Math.round(v).toLocaleString()
+              const monthLabel = m => { const [y,mo] = m.split('-'); return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mo)-1] + ' ' + y.slice(2) }
+
+              return (
+                <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #ebebeb', overflow: 'hidden' }}>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: '#fafafa' }}>
+                          <th style={{ padding: '8px 14px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #ebebeb', position: 'sticky', left: 0, background: '#fafafa', minWidth: 130 }}>Facility</th>
+                          {months.map(m => (
+                            <th key={m} style={{ padding: '8px 14px', textAlign: 'right', fontSize: 10, fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #ebebeb', minWidth: 100 }}>{monthLabel(m)}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {facilities.map((fac, fi) => {
+                          const vals = months.map(m => facMonthBal[fac]?.[m] ?? null)
+                          return (
+                            <tr key={fac} style={{ borderBottom: '1px solid #f5f5f5', background: fi % 2 === 0 ? '#fff' : '#fafafa' }}>
+                              <td style={{ padding: '9px 14px', fontWeight: 500, color: '#1a1a1a', position: 'sticky', left: 0, background: fi % 2 === 0 ? '#fff' : '#fafafa' }}>{fac}</td>
+                              {vals.map((v, i) => {
+                                const prev = i > 0 ? vals[i-1] : null
+                                const change = v != null && prev != null ? v - prev : null
+                                const color = change == null ? '#1a1a1a' : change > 0 ? '#166534' : change < 0 ? '#991b1b' : '#1a1a1a'
+                                return (
+                                  <td key={i} style={{ padding: '9px 14px', textAlign: 'right', fontFamily: 'DM Mono, monospace', color, fontWeight: change != null && change !== 0 ? 600 : 400 }}>
+                                    {fmtK(v)}
+                                    {change != null && change !== 0 && (
+                                      <div style={{ fontSize: 9, color: change > 0 ? '#166534' : '#991b1b', marginTop: 1 }}>
+                                        {change > 0 ? '▲' : '▼'} {fmtK(Math.abs(change))}
+                                      </div>
+                                    )}
+                                  </td>
+                                )
+                              })}
+                            </tr>
+                          )
+                        })}
+                        {/* Total row */}
+                        <tr style={{ borderTop: '2px solid #e5e5e5', background: '#f0f9ff' }}>
+                          <td style={{ padding: '9px 14px', fontWeight: 700, color: '#1a1a1a', position: 'sticky', left: 0, background: '#f0f9ff' }}>Total</td>
+                          {months.map((m, i) => {
+                            const tot = facilities.reduce((s, fac) => s + (facMonthBal[fac]?.[m] || 0), 0)
+                            const prevTot = i > 0 ? facilities.reduce((s, fac) => s + (facMonthBal[fac]?.[months[i-1]] || 0), 0) : null
+                            const change = prevTot != null ? tot - prevTot : null
+                            return (
+                              <td key={m} style={{ padding: '9px 14px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: '#0c4a6e' }}>
+                                ${(tot/1e6).toFixed(2)}M
+                                {change != null && change !== 0 && (
+                                  <div style={{ fontSize: 9, color: change > 0 ? '#166534' : '#991b1b', fontWeight: 400, marginTop: 1 }}>
+                                    {change > 0 ? '▲' : '▼'} ${(Math.abs(change)/1e6).toFixed(2)}M
+                                  </div>
+                                )}
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+        )}
+
+        {/* ── IMPORT TAB (admin only) ── */}}
         {tab === 'Import' && isAdmin && (
           <div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, maxWidth: 700 }}>
